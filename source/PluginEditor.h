@@ -1,10 +1,10 @@
 #pragma once
 
 #include "PluginProcessor.h"
-#include "BinaryData.h"
+#include <visage/app.h>
 
 //==============================================================================
-class PluginEditor : public juce::AudioProcessorEditor {
+class PluginEditor : public juce::AudioProcessorEditor, private juce::ComponentMovementWatcher {
 public:
     explicit PluginEditor(PluginProcessor &);
 
@@ -18,7 +18,15 @@ public:
 private:
     // This reference is provided as a quick way for your editor to
     // access the processor object that created it.
+    void componentPeerChanged() override;
+
+    void componentMovedOrResized(bool wasMoved, bool wasResized) override {
+        juce::ignoreUnused(wasMoved, wasResized);
+    }
+
+    void componentVisibilityChanged() override {}
+
     PluginProcessor &processorRef;
-    juce::TextButton inspectButton{"Inspect the UI"};
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
+    visage::ApplicationWindow appWindow{};
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginEditor)
 };
