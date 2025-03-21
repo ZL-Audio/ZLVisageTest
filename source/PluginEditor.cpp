@@ -1,28 +1,31 @@
-#include "PluginEditor.h"
+// Copyright (C) 2025 - zsliu98
+// This file is part of ZLVisageTest
+//
+// ZLVisageTest is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License Version 3 as published by the Free Software Foundation.
+//
+// ZLVisageTest is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License along with ZLVisageTest. If not, see <https://www.gnu.org/licenses/>.
+
+#include "PluginEditor.hpp"
 
 PluginEditor::PluginEditor(PluginProcessor &p)
-    : AudioProcessorEditor(&p), processorRef(p) {
+    : AudioProcessorEditor(&p), processorRef(p), window(p) {
     juce::ignoreUnused(processorRef);
 
-    setResizeLimits(static_cast<int>(10),
-                    static_cast<int>(10),
-                    static_cast<int>(10000),
-                    static_cast<int>(10000));
-    setResizable(true, p.wrapperType != PluginProcessor::wrapperType_AudioUnitv3);
-    setSize(600, 300);
+    setSize(600, 375);
 }
 
 PluginEditor::~PluginEditor() = default;
 
 void PluginEditor::paint(juce::Graphics &g) {
-    g.fillAll(juce::Colours::black);
+    g.fillAll(juce::Colours::white);
 }
 
 void PluginEditor::resized() {
     const auto bound = getLocalBounds();
     window.setWindowDimensions(bound.getWidth(),
-                               juce::roundToInt(static_cast<float>(bound.getHeight()) * .75f));
-    // DBG(std::to_string(bound.getWidth()) + "\t" + std::to_string(window.width()));
+                               juce::roundToInt(static_cast<float>(bound.getHeight()) * .8f));
 }
 
 void PluginEditor::parentHierarchyChanged() {

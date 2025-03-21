@@ -1,16 +1,24 @@
-#include "PluginProcessor.h"
-#include "PluginEditor.h"
+// Copyright (C) 2025 - zsliu98
+// This file is part of ZLVisageTest
+//
+// ZLVisageTest is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License Version 3 as published by the Free Software Foundation.
+//
+// ZLVisageTest is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License along with ZLVisageTest. If not, see <https://www.gnu.org/licenses/>.
+
+#include "PluginProcessor.hpp"
+#include "PluginEditor.hpp"
 
 //==============================================================================
 PluginProcessor::PluginProcessor()
-        : AudioProcessor(BusesProperties()
-#if !JucePlugin_IsMidiEffect
-#if !JucePlugin_IsSynth
-                                 .withInput("Input", juce::AudioChannelSet::stereo(), true)
-#endif
-                                 .withOutput("Output", juce::AudioChannelSet::stereo(), true)
-#endif
-) {
+    : AudioProcessor(BusesProperties()
+          .withInput("Input", juce::AudioChannelSet::stereo(), true)
+          .withInput("Aux", juce::AudioChannelSet::stereo(), true)
+          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+      parameters(*this, nullptr,
+                 juce::Identifier("ZLCompressorParameters"),
+                 zlDSP::getParameterLayout()) {
 }
 
 PluginProcessor::~PluginProcessor() {
@@ -50,7 +58,7 @@ double PluginProcessor::getTailLengthSeconds() const {
 }
 
 int PluginProcessor::getNumPrograms() {
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
+    return 1; // NB: some hosts don't cope very well if you tell them there are 0 programs,
     // so this should be at least 1, even if you're not really implementing programs.
 }
 
@@ -73,64 +81,186 @@ void PluginProcessor::changeProgramName(int index, const juce::String &newName) 
 
 //==============================================================================
 void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
-    juce::ignoreUnused(sampleRate, samplesPerBlock);
+    const juce::dsp::ProcessSpec spec{
+        sampleRate,
+        static_cast<juce::uint32>(samplesPerBlock),
+        2
+    };
+    doubleBuffer.setSize(4, samplesPerBlock);
+    controller.prepare(spec);
+    // determine current channel layout
+    const auto *mainBus = getBus(true, 0);
+    const auto *auxBus = getBus(true, 1);
+    channelLayout = ChannelLayout::invalid;
+    if (mainBus == nullptr) {
+        return;
+    }
+    if (mainBus->getCurrentLayout() == juce::AudioChannelSet::mono()) {
+        if (auxBus == nullptr || !auxBus->isEnabled()) {
+            channelLayout = ChannelLayout::main1aux0;
+        } else if (auxBus->getCurrentLayout() == juce::AudioChannelSet::mono()) {
+            channelLayout = ChannelLayout::main1aux1;
+        } else if (auxBus->getCurrentLayout() == juce::AudioChannelSet::stereo()) {
+            channelLayout = ChannelLayout::main1aux2;
+        }
+    } else if (mainBus->getCurrentLayout() == juce::AudioChannelSet::stereo()) {
+        if (auxBus == nullptr || !auxBus->isEnabled()) {
+            channelLayout = ChannelLayout::main2aux0;
+        } else if (auxBus->getCurrentLayout() == juce::AudioChannelSet::mono()) {
+            channelLayout = ChannelLayout::main2aux1;
+        } else if (auxBus->getCurrentLayout() == juce::AudioChannelSet::stereo()) {
+            channelLayout = ChannelLayout::main2aux2;
+        }
+    }
 }
 
 void PluginProcessor::releaseResources() {
-    // When playback stops, you can use this as an opportunity to free up any
-    // spare memory, etc.
 }
 
 bool PluginProcessor::isBusesLayoutSupported(const BusesLayout &layouts) const {
-#if JucePlugin_IsMidiEffect
-    juce::ignoreUnused (layouts);
-    return true;
-#else
-    // This is the place where you check if the layout is supported.
-    // In this template code we only support mono or stereo.
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-        && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
-        return false;
-
-    // This checks if the input layout matches the output layout
-#if !JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
-        return false;
-#endif
-
-    return true;
-#endif
+    if (layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo() &&
+        layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() &&
+        (layouts.getChannelSet(true, 1).isDisabled() ||
+         layouts.getChannelSet(true, 1) == juce::AudioChannelSet::mono() ||
+         layouts.getChannelSet(true, 1) == juce::AudioChannelSet::stereo())) {
+        return true;
+    }
+    if (layouts.getMainInputChannelSet() == juce::AudioChannelSet::mono() &&
+        layouts.getMainOutputChannelSet() == juce::AudioChannelSet::mono() &&
+        (layouts.getChannelSet(true, 1).isDisabled() ||
+         layouts.getChannelSet(true, 1) == juce::AudioChannelSet::mono() ||
+         layouts.getChannelSet(true, 1) == juce::AudioChannelSet::stereo())) {
+        return true;
+    }
+    return false;
 }
 
 void PluginProcessor::processBlock(juce::AudioBuffer<float> &buffer,
                                    juce::MidiBuffer &midiMessages) {
     juce::ignoreUnused(midiMessages);
-
     juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
+    doubleBuffer.setSize(4, buffer.getNumSamples(), false, false, true);
+    switch (channelLayout) {
+        case ChannelLayout::main1aux0: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 0);
+            doubleBufferCopyFrom(2, buffer, 0);
+            doubleBufferCopyFrom(3, buffer, 0);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            break;
+        }
+        case ChannelLayout::main1aux1: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 0);
+            doubleBufferCopyFrom(2, buffer, 1);
+            doubleBufferCopyFrom(3, buffer, 1);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            break;
+        }
+        case ChannelLayout::main1aux2: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 0);
+            doubleBufferCopyFrom(2, buffer, 1);
+            doubleBufferCopyFrom(3, buffer, 2);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            break;
+        }
+        case ChannelLayout::main2aux0: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 1);
+            doubleBufferCopyFrom(2, buffer, 0);
+            doubleBufferCopyFrom(3, buffer, 1);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            doubleBufferCopyTo(1, buffer, 1);
+            break;
+        }
+        case ChannelLayout::main2aux1: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 1);
+            doubleBufferCopyFrom(2, buffer, 2);
+            doubleBufferCopyFrom(3, buffer, 2);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            doubleBufferCopyTo(1, buffer, 1);
+            break;
+        }
+        case ChannelLayout::main2aux2: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 1);
+            doubleBufferCopyFrom(2, buffer, 2);
+            doubleBufferCopyFrom(3, buffer, 3);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            doubleBufferCopyTo(1, buffer, 1);
+            break;
+        }
+        case ChannelLayout::invalid: {
+        }
+    }
+}
 
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
-    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear(i, 0, buffer.getNumSamples());
-
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel) {
-        auto *channelData = buffer.getWritePointer(channel);
-        juce::ignoreUnused(channelData);
-        // ..do something to the data...
+void PluginProcessor::processBlock(juce::AudioBuffer<double> &buffer, juce::MidiBuffer &midiMessages) {
+    juce::ignoreUnused(midiMessages);
+    juce::ScopedNoDenormals noDenormals;
+    doubleBuffer.setSize(4, buffer.getNumSamples(), false, false, true);
+    switch (channelLayout) {
+        case ChannelLayout::main1aux0: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 0);
+            doubleBufferCopyFrom(2, buffer, 0);
+            doubleBufferCopyFrom(3, buffer, 0);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            break;
+        }
+        case ChannelLayout::main1aux1: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 0);
+            doubleBufferCopyFrom(2, buffer, 1);
+            doubleBufferCopyFrom(3, buffer, 1);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            break;
+        }
+        case ChannelLayout::main1aux2: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 0);
+            doubleBufferCopyFrom(2, buffer, 1);
+            doubleBufferCopyFrom(3, buffer, 2);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            break;
+        }
+        case ChannelLayout::main2aux0: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 1);
+            doubleBufferCopyFrom(2, buffer, 0);
+            doubleBufferCopyFrom(3, buffer, 1);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            doubleBufferCopyTo(1, buffer, 1);
+            break;
+        }
+        case ChannelLayout::main2aux1: {
+            doubleBufferCopyFrom(0, buffer, 0);
+            doubleBufferCopyFrom(1, buffer, 1);
+            doubleBufferCopyFrom(2, buffer, 2);
+            doubleBufferCopyFrom(3, buffer, 2);
+            controller.process(doubleBuffer);
+            doubleBufferCopyTo(0, buffer, 0);
+            doubleBufferCopyTo(1, buffer, 1);
+            break;
+        }
+        case ChannelLayout::main2aux2: {
+            controller.process(buffer);
+            break;
+        }
+        case ChannelLayout::invalid: {
+        }
     }
 }
 
@@ -141,26 +271,61 @@ bool PluginProcessor::hasEditor() const {
 
 juce::AudioProcessorEditor *PluginProcessor::createEditor() {
     return new PluginEditor(*this);
+    // return new juce::GenericAudioProcessorEditor(*this);
 }
 
 //==============================================================================
 void PluginProcessor::getStateInformation(juce::MemoryBlock &destData) {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
-    juce::ignoreUnused(destData);
+    auto tempTree = juce::ValueTree("ZLCompressorParameters");
+    tempTree.appendChild(parameters.copyState(), nullptr);
+    // tempTree.appendChild(parametersNA.copyState(), nullptr);
+    const std::unique_ptr<juce::XmlElement> xml(tempTree.createXml());
+    copyXmlToBinary(*xml, destData);
 }
 
-void PluginProcessor::setStateInformation(const void *data, int sizeInBytes) {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
-    juce::ignoreUnused(data, sizeInBytes);
+void PluginProcessor::setStateInformation(const void *data, const int sizeInBytes) {
+    std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
+    if (xmlState != nullptr && xmlState->hasTagName("ZLCompressorParameters")) {
+        auto tempTree = juce::ValueTree::fromXml(*xmlState);
+        parameters.replaceState(tempTree.getChildWithName(parameters.state.getType()));
+        // parametersNA.replaceState(tempTree.getChildWithName(parametersNA.state.getType()));
+    }
+}
+
+void PluginProcessor::doubleBufferCopyFrom(const int destChan,
+                                           const juce::AudioBuffer<float> &buffer, const int srcChan) {
+    auto *dest = doubleBuffer.getWritePointer(destChan);
+    auto *src = buffer.getReadPointer(srcChan);
+    for (int i = 0; i < buffer.getNumSamples(); ++i) {
+        dest[i] = static_cast<double>(src[i]);
+    }
+}
+
+void PluginProcessor::doubleBufferCopyFrom(const int destChan,
+                                           const juce::AudioBuffer<double> &buffer, const int srcChan) {
+    juce::FloatVectorOperations::copy(doubleBuffer.getWritePointer(destChan),
+                                      buffer.getReadPointer(srcChan),
+                                      buffer.getNumSamples());
+}
+
+void PluginProcessor::doubleBufferCopyTo(const int srcChan,
+                                         juce::AudioBuffer<float> &buffer, int const destChan) const {
+    auto *src = doubleBuffer.getReadPointer(srcChan);
+    auto *dest = buffer.getWritePointer(destChan);
+    for (int i = 0; i < buffer.getNumSamples(); ++i) {
+        dest[i] = static_cast<float>(src[i]);
+    }
+}
+
+void PluginProcessor::doubleBufferCopyTo(const int srcChan,
+                                         juce::AudioBuffer<double> &buffer, int const destChan) const {
+    juce::FloatVectorOperations::copy(buffer.getWritePointer(destChan),
+                                      doubleBuffer.getReadPointer(srcChan),
+                                      buffer.getNumSamples());
 }
 
 //==============================================================================
 // This creates new instances of the plugin..
-juce::AudioProcessor *JUCE_CALLTYPE
-
-createPluginFilter() {
+juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter() {
     return new PluginProcessor();
 }
