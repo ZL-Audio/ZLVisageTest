@@ -33,12 +33,12 @@ jobs:
       matrix:
         include:
           - name: Linux
-            os: ubuntu-22.04
+            os: ubuntu-latest
             pluginval-binary: ./pluginval
             plugin_os_format: "VST3"
-            cmake_extra_flags: -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17
+            cmake_extra_flags: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
           - name: macOS
-            os: macos-15
+            os: macos-latest
             pluginval-binary: pluginval.app/Contents/MacOS/pluginval
             plugin_os_format: "AU"
             cmake_extra_flags:
@@ -49,21 +49,14 @@ jobs:
             cmake_extra_flags: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 
     steps:
-      - name: Set up Clang (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x ./llvm.sh
-          sudo ./llvm.sh 17
-
       # This also starts up our "fake" display Xvfb, needed for pluginval
       - name: Install Linux Deps (Linux)
         if: runner.os == 'Linux'
         # Thanks to McMartin & co https://forum.juce.com/t/list-of-juce-dependencies-under-linux/15121/44
         run: |
           sudo apt-get update && sudo apt install libasound2-dev libx11-dev libxinerama-dev libxext-dev libfreetype-dev libfontconfig1-dev libwebkit2gtk-4.1-dev libglu1-mesa-dev xvfb ninja-build
-          sudo apt-get install cmake devscripts debhelper mesa-common-dev libxrandr-dev libxcursor-dev libxcomposite-dev libglib2.0-0 mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers
           sudo /usr/bin/Xvfb $DISPLAY &
+          sudo apt-get install cmake devscripts debhelper mesa-common-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libglib2.0-0 libfontconfig1-dev mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers
 
       - name: Set up Developer Command Prompt (Windows)
         if: runner.os == 'Windows'
